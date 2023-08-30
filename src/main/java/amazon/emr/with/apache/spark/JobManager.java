@@ -6,24 +6,29 @@ import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.emr.EmrClient;
 import software.amazon.awssdk.services.emr.model.ActionOnFailure;
 import software.amazon.awssdk.services.emr.model.AddJobFlowStepsRequest;
+import software.amazon.awssdk.services.emr.model.AddJobFlowStepsResponse;
 import software.amazon.awssdk.services.emr.model.Application;
+import software.amazon.awssdk.services.emr.model.DescribeStepRequest;
+import software.amazon.awssdk.services.emr.model.DescribeStepResponse;
 import software.amazon.awssdk.services.emr.model.HadoopJarStepConfig;
 import software.amazon.awssdk.services.emr.model.JobFlowInstancesConfig;
 import software.amazon.awssdk.services.emr.model.PlacementType;
 import software.amazon.awssdk.services.emr.model.RunJobFlowRequest;
 import software.amazon.awssdk.services.emr.model.RunJobFlowResponse;
 import software.amazon.awssdk.services.emr.model.StepConfig;
+import software.amazon.awssdk.services.emr.model.StepState;
+import software.amazon.awssdk.services.emr.model.TerminateJobFlowsRequest;
 
 public class JobManager {
 
 	static EmrClient emrClient = EmrClient.builder().region(Region.US_EAST_1)
 			.credentialsProvider(StaticCredentialsProvider.create(AwsBasicCredentials.create(null, null))).build();
 
-	public static void main(String[] args) {
+	public static void main(String[] args) throws InterruptedException {
 		createClusterAndRunSparkJob();
 	}
 
-	private static void createClusterAndRunSparkJob() {
+	private static void createClusterAndRunSparkJob() throws InterruptedException {
 		Application spark = Application.builder().name("Spark").build();
 		Application hadoop = Application.builder().name("Hadoop").build();
 		Application zeppelin = Application.builder().name("Zeppelin").build();
@@ -57,8 +62,24 @@ public class JobManager {
 
 		emrClient.addJobFlowSteps(AddJobFlowStepsRequest.builder().jobFlowId(runJobFlowResponse.jobFlowId())
 				.steps(downloadingJarFromS3).build());
-		emrClient.addJobFlowSteps(AddJobFlowStepsRequest.builder().jobFlowId(runJobFlowResponse.jobFlowId())
-				.steps(workCountInSpark).build());
+		AddJobFlowStepsResponse addJobFlowStepsResponse = emrClient.addJobFlowSteps(AddJobFlowStepsRequest.builder()
+				.jobFlowId(runJobFlowResponse.jobFlowId()).steps(workCountInSpark).build());
+
+		boolean stepsCompleted = false;
+		while (!stepsCompleted) {
+			DescribeStepResponse describeStepResponse = emrClient
+					.describeStep(DescribeStepRequest.builder().clusterId(runJobFlowResponse.jobFlowId())
+							.stepId(addJobFlowStepsResponse.stepIds().get(0)).build());
+			if (describeStepResponse.step().status().state().equals(StepState.COMPLETED)
+					|| describeStepResponse.step().status().state().equals(StepState.CANCELLED)
+					|| describeStepResponse.step().status().state().equals(StepState.FAILED)) {
+				TerminateJobFlowsRequest terminateJobFlowsRequest = TerminateJobFlowsRequest.builder()
+						.jobFlowIds(runJobFlowResponse.jobFlowId()).build();
+				emrClient.terminateJobFlows(terminateJobFlowsRequest);
+			}
+			Thread.sleep(5000L);
+		}
+
 	}
 
 }
